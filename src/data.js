@@ -4,7 +4,6 @@ var big = require('./bigdecimal.js');
 var BIG255 = new big.BigInteger('255');
 var ZERO = new big.BigInteger('0');
 var ONE = new big.BigInteger('1');
-var MASK32 = ONE.shiftLeft(32).subtract(ONE);
 
 // Data parser and serializer
 
@@ -56,7 +55,7 @@ function State(buffer) {
 }
 
 function is_string(v) { return (typeof v === 'string'); }
-function is_array(v) { return (v.constructor === Array); }
+function is_array(v) { return (v.constructor.name === 'Array'); }
 function is_bigint(v) { return (!!v.divideAndRemainder); }
 
 function raw_bytes(v) {
@@ -96,12 +95,12 @@ function to_mpint(v, base) {
     return v;
 }
 
-
 function to_buffer(v) {
     if (is_string(v) || is_array(v))
         v = new Buffer(v);
     return v;
 }
+
 
 function type(klass) {
     var x = function(value, option) {
@@ -111,6 +110,18 @@ function type(klass) {
     return x;
 }
 
+/*
+    Serializing protocol is as follows:
+        1. 'flatten' is called to optionally change the input to internal representation.
+            Further on, this value is passed to 'size' or 'serialize'
+        2. 'size' is called for every element and it should return a size in bytes
+            of this object.
+        3. Buffer is created to hold everything.
+        4. 'serialize' is called for every object and it should serialize itself.
+    Parsing is easier:
+        1. 'parse' method is called for every object in turn.
+            It should parse itself and return itself.
+ */
 
 var Byte = {
     flatten : null,
