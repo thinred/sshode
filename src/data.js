@@ -2,7 +2,8 @@
 var big = require('./bigdecimal.js');
 
 var BIG255 = new big.BigInteger('255');
-var ONE = new big.BigInteger("1");
+var ZERO = new big.BigInteger('0');
+var ONE = new big.BigInteger('1');
 var MASK32 = ONE.shiftLeft(32).subtract(ONE);
 
 // Data parser and serializer
@@ -16,6 +17,10 @@ function State(buffer) {
         var c = buffer.readUInt8(offset);
         offset += 1;
         return c;
+    }
+
+    this.peekByte = function() {
+        return buffer.readUInt8(offset);
     }
 
     this.writeByte = function(x) {
@@ -52,6 +57,7 @@ function State(buffer) {
 
 function is_string(v) { return (typeof v === 'string'); }
 function is_array(v) { return (v.constructor === Array); }
+function is_bigint(v) { return (!!v.divideAndRemainder); }
 
 function raw_bytes(v) {
     var bytes = [];
@@ -83,7 +89,7 @@ function mpint_to_bytes(sign, v) {
 }
 
 function to_mpint(v, base) {
-    if (!v.divideAndRemainder) { // detect if v is already BigInteger
+    if (!is_bigint(v)) { // detect if v is already BigInteger
         if (!base) base = 10;
         v = new big.BigInteger(v.toString(), base);
     }
@@ -110,20 +116,21 @@ var Byte = {
     flatten : null,
     size : function() { return 1; },
     serialize : function(v, state) { state.writeByte(v); },
+    parse : function(state) { return state.readByte(); }
 }
 
 var Bytes = {
     flatten : to_buffer,
     size : function(v) { return v.length; },
-    serialize : function(v, state) {
-        state.writeBytes(v);
-    }
+    serialize : function(v, state) { state.writeBytes(v); },
+    parse : function(state, n) { return state.readBytes(n); }
 }
 
 var Bool = {
     flatten : function(v) { return (!!v); },
     size : function() { return 1; },
-    serialize : function(v, state) { state.writeByte(v ? 1 : 0); }
+    serialize : function(v, state) { state.writeByte(v ? 0x01 : 0x00); },
+    parse : function(state) { return (state.readByte() != 0x00); }
 }
 
 var Uint32 = {
@@ -133,7 +140,8 @@ var Uint32 = {
         if (v < 0 || v > 0xffffffff)
             throw 'Invalid uint32';
         state.writeInt(v);
-    }
+    },
+    parse : function(state) { return state.readInt(); }
 }
 
 var Uint64 = {
@@ -146,6 +154,11 @@ var Uint64 = {
         while (bytes.length != 8) bytes.push(0x00);
         bytes.reverse();
         return state.writeBytes(new Buffer(bytes));
+    },
+    parse : function(state) {
+        var h = big.BigInteger.valueOf(state.readInt());
+        var l = big.BigInteger.valueOf(state.readInt());
+        return h.shiftLeft(32).or(l);
     }
 }
 
@@ -155,6 +168,20 @@ var Str = {
     serialize : function(v, state) {
         state.writeInt(v.length);
         state.writeBytes(v);
+    },
+    parse : function(state) {
+        var n = state.readInt();
+        return state.readBytes(n); // TODO
+    }
+}
+
+var Utf8 = {
+    flatten : function(v) { return new Buffer(v, 'utf8'); },
+    size : Str.size,
+    serialize : Str.serialize,
+    parse : function(state) {
+        var s = Str.parse(state);
+        return s.toString('utf8');
     }
 }
 
@@ -188,6 +215,29 @@ var Mpint = {
         var bytes = mpint_to_bytes(v[0], v[1]);
         bytes.reverse(); // LSB => MSB
         return Str.serialize(Str.flatten(bytes), state);
+    },
+    parse : function(state) {
+        var n = state.readInt();
+        if (n == 0)
+            return ZERO;
+        var sign = (state.peekByte() & 0x80) != 0;
+        var x = ZERO;
+        // take integers
+        for (var i = 0; i < (n >> 2); i++) {
+            var u = state.readInt();
+            x = x.shiftLeft(32).or(big.BigInteger.valueOf(u));
+        }
+        // take remaining bytes
+        for (var i = 0; i < (n % 4); i++) {
+            var b = state.readByte();
+            x = x.shiftLeft(8).or(big.BigInteger.valueOf(b))
+        }
+        if (sign) {
+            // we have to flip it and add 1
+            var mask = ONE.shiftLeft(n * 8).subtract(ONE);
+            x = x.xor(mask).add(ONE).negate();
+        }
+        return x;
     }
 }
 
@@ -198,17 +248,13 @@ var Namelist = {
         return v;
     },
     size : Str.size,
-    serialize : Str.serialize
+    serialize : Str.serialize,
+    parse : function(state) {
+
+    }
 }
 
-exports.byte = type(Byte);
-exports.bytes = type(Bytes);
-exports.boolean = type(Bool);
-exports.uint32 = type(Uint32);
-exports.uint64 = type(Uint64);
-exports.string = type(Str);
-exports.mpint = type(Mpint);
-exports.namelist = type(Namelist);
+/* Public interface */
 
 function serialize() {
     // used to write SSH data to a buffer
@@ -231,4 +277,87 @@ function serialize() {
     if (!state.eof())
         throw 'Fatal error (eof not reached)';
     return buffer;
+}
+
+function parse_array(buffer, spec) {
+    var state = new State(buffer);
+    var values = [];
+    for (var i in spec) {
+        var el = spec[i];
+        var v = el.klass.parse(state, el.value);
+        values.push(v);
+    }
+    return values;
+}
+
+function parse_object(buffer, spec) {
+    var state = new State(buffer);
+    var values = {};
+    for (var key in spec) {
+        var el = spec[key];
+        values[key] = el.klass.parse(state, el.value);
+    }
+    return values;
+}
+
+function parse() {
+    var buffer = arguments[0];
+    var args = Array.prototype.slice.call(arguments, 1);
+    if (args.length == 0)
+        return [];
+    var first = args[0];
+    if (args.length > 1 || (args.length == 1 && !is_array(first)))
+        return parse_array(buffer, args);
+    return (is_array(first) ? parse_array(buffer, first) : parse_object(buffer, first));
+}
+
+function hexize() {
+    return serialize.apply(this, arguments).toString('hex');
+}
+
+function repr(x) {
+    var type = x.constructor.name;
+    if (is_array(x)) {
+        var s = x.map(repr).join(', ');
+        return '[ ' + s + ' ]'; 
+    }
+    else if (is_bigint(x)) {
+        return "mpint(" + x.toString() + ")";
+    }
+    else if (is_string(x)) {
+        return '"' + x + '"';
+    }
+    else if (type === "Buffer") {
+        return "Buffer(0x" + x.toString('hex') + ")";
+    }
+    else if (type === "Object") {
+        var items = [];
+        for(var key in x) {
+            items.push(key + ": " + repr(x[key]));
+        }
+        return "{ " + items.join(", ") + " }";
+    }
+    return x.toString();
+}
+
+/* Exports */
+
+exports.byte = type(Byte);
+exports.bytes = type(Bytes);
+exports.boolean = type(Bool);
+exports.uint32 = type(Uint32);
+exports.uint64 = type(Uint64);
+exports.string = type(Str);
+exports.utf8 = type(Utf8); /* like string, but works with UTF-8 */
+exports.mpint = type(Mpint);
+exports.namelist = type(Namelist);
+
+exports.serialize = serialize;
+exports.hexize = hexize;
+exports.parse_array = parse_array;
+exports.parse_object = parse_object;
+exports.parse = parse;
+exports.repr = repr;
+exports.show = function(x) {
+    console.log(repr(x));
 }
