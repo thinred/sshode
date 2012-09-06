@@ -1,4 +1,6 @@
 
+'use strict';
+
 var big = require('./bigdecimal.js');
 
 var BIG255 = new big.BigInteger('255');
