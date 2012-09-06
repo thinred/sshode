@@ -303,16 +303,6 @@ function parse_array(buffer, spec) {
     return values;
 }
 
-function parse_object(buffer, spec) {
-    var state = new State(buffer);
-    var values = {};
-    for (var key in spec) {
-        var el = spec[key];
-        values[key] = el.klass.parse(state, el.value);
-    }
-    return values;
-}
-
 function parse() {
     var buffer = arguments[0];
     var args = Array.prototype.slice.call(arguments, 1);
@@ -321,7 +311,7 @@ function parse() {
     var first = args[0];
     if (args.length > 1 || (args.length == 1 && !is_array(first)))
         return parse_array(buffer, args);
-    return (is_array(first) ? parse_array(buffer, first) : parse_object(buffer, first));
+    return parse_array(buffer, first);
 }
 
 function hexize() {
@@ -368,7 +358,6 @@ exports.namelist = type(Namelist);
 exports.serialize = serialize;
 exports.hexize = hexize;
 exports.parse_array = parse_array;
-exports.parse_object = parse_object;
 exports.parse = parse;
 exports.repr = repr;
 exports.show = function(x) {
