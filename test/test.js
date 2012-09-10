@@ -1,0 +1,2 @@
+
+require('./data.js').run();
