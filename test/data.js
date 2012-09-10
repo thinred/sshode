@@ -44,6 +44,7 @@ exports.run = function() {
     hexeq(d.mpint(80, 16), '000000020080');
     hexeq(d.mpint(-1234, 16), '00000002edcc');
     hexeq(d.mpint('-deadbeef', 16), '00000005ff21524111');
+    hexeq(d.mpint(-32768), '000000028000');
     
     // dumping name-lists
     hexeq(d.namelist(['one', 'two']), '00000007' + '6f6e652c74776f');

@@ -1,0 +1,4 @@
+#!/bin/bash
+cover run ./test.js
+cover report html
+xdg-open cover_html/index.html
