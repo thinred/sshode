@@ -258,7 +258,7 @@ var Namelist = {
     flatten : function(v) {
         if (is_array(v))
             v = v.join(',');
-        return v;
+        return to_buffer(v);
     },
     size : Str.size,
     serialize : Str.serialize,
@@ -354,6 +354,8 @@ exports.string = type(Str);
 exports.utf8 = type(Utf8); /* like string, but works with UTF-8 */
 exports.mpint = type(Mpint);
 exports.namelist = type(Namelist);
+
+exports.bigint = big.BigInteger;
 
 exports.serialize = serialize;
 exports.hexize = hexize;
