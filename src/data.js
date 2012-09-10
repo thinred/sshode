@@ -258,12 +258,13 @@ var Namelist = {
     flatten : function(v) {
         if (is_array(v))
             v = v.join(',');
-        return to_buffer(v);
+        return Utf8.flatten(v);
     },
-    size : Str.size,
-    serialize : Str.serialize,
+    size : Utf8.size,
+    serialize : Utf8.serialize,
     parse : function(state) {
-
+        var s = Utf8.parse(state);
+        return s.split(',');
     }
 }
 
@@ -318,31 +319,6 @@ function hexize() {
     return serialize.apply(this, arguments).toString('hex');
 }
 
-function repr(x) {
-    var type = x.constructor.name;
-    if (is_array(x)) {
-        var s = x.map(repr).join(', ');
-        return '[ ' + s + ' ]'; 
-    }
-    else if (is_bigint(x)) {
-        return "mpint(" + x.toString() + ")";
-    }
-    else if (is_string(x)) {
-        return '"' + x + '"';
-    }
-    else if (type === "Buffer") {
-        return "Buffer(0x" + x.toString('hex') + ")";
-    }
-    else if (type === "Object") {
-        var items = [];
-        for(var key in x) {
-            items.push(key + ": " + repr(x[key]));
-        }
-        return "{ " + items.join(", ") + " }";
-    }
-    return x.toString();
-}
-
 /* Exports */
 
 exports.byte = type(Byte);
@@ -356,12 +332,10 @@ exports.mpint = type(Mpint);
 exports.namelist = type(Namelist);
 
 exports.bigint = big.BigInteger;
+exports.is_bigint = is_bigint;
+exports.is_array = is_array;
 
 exports.serialize = serialize;
 exports.hexize = hexize;
 exports.parse_array = parse_array;
 exports.parse = parse;
-exports.repr = repr;
-exports.show = function(x) {
-    console.log(repr(x));
-}
