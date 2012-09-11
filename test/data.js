@@ -63,7 +63,7 @@ exports.run = function() {
     same(reparse(d.boolean(false)), [ false ]);
     same(reparse(d.byte(1), d.byte(2)), [1, 2]);
     var buff = d.serialize(d.bytes([1,2,3]));
-    var out = d.parse(buff, [ d.bytes(3) ])[0];
+    var out = d.parse_array(buff, [ d.bytes(3) ])[0];
     assert.equal(out.length, 3);
     assert.equal([ out[0], out[1], out[2] ].toString(), '1,2,3');
 
@@ -96,11 +96,15 @@ exports.run = function() {
 
     // various
 
-    assert.equal(d.parse(new Buffer(0)).toString(), '');
-    var b = new Buffer([1, 2]);
-    same(d.parse(b, d.byte, d.byte), d.parse(b, [d.byte, d.byte]));
+    assert.equal(d.parse_array(new Buffer(0)).toString(), '');
 
     // parsing namelist
 
     same(reparse(d.namelist([ 'romek', 'tomek'])), [['romek', 'tomek']]);
+
+    // parsing to object
+    var b = new Buffer([1, 2, 3]);
+    var o = d.parse_object(b, [ d.byte('b1'), d.bytes('b2', 2) ]);
+    assert.equal(o.b1, 1)
+    assert.equal(o.b2.toString('hex'), '0203');
 };

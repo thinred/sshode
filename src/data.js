@@ -304,15 +304,14 @@ function parse_array(buffer, spec) {
     return values;
 }
 
-function parse() {
-    var buffer = arguments[0];
-    var args = Array.prototype.slice.call(arguments, 1);
-    if (args.length == 0)
-        return [];
-    var first = args[0];
-    if (args.length > 1 || (args.length == 1 && !is_array(first)))
-        return parse_array(buffer, args);
-    return parse_array(buffer, first);
+function parse_object(buffer, spec) {
+    var state = new State(buffer);
+    var obj = {};
+    for (var i in spec) {
+        var el = spec[i];
+        obj[el.value] = el.klass.parse(state, el.option);
+    }
+    return obj;
 }
 
 function hexize() {
@@ -338,4 +337,4 @@ exports.is_array = is_array;
 exports.serialize = serialize;
 exports.hexize = hexize;
 exports.parse_array = parse_array;
-exports.parse = parse;
+exports.parse_object = parse_object;
