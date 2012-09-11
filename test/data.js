@@ -1,11 +1,13 @@
 
 var assert = require("assert")
 var d = require('../src/data.js');
+var utils = require('./utils.js');
+
+var same = utils.same;
 
 var hexeq = function() {
     var args = Array.prototype.slice.call(arguments);
-    var hex = args[args.length - 1];
-    args.pop();
+    var hex = args.pop();
     var repr = d.hexize.apply(this, args);
     return assert.equal(repr, hex);
 }
@@ -14,12 +16,6 @@ var reparse = function() {
     var args = Array.prototype.slice.call(arguments);
     var repr = d.serialize.apply(this, args);
     return d.parse_array.call(this, repr, arguments);
-}
-
-var same = function(x, y) {
-    x = JSON.stringify(x);
-    y = JSON.stringify(y);
-    return assert.equal(x, y);
 }
 
 exports.run = function() {
