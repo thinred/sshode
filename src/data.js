@@ -2,6 +2,7 @@
 'use strict';
 
 var big = require('./bigdecimal.js');
+var crypto = require('crypto');
 
 var BIG255 = new big.BigInteger('255');
 var ZERO = new big.BigInteger('0');
@@ -268,15 +269,27 @@ var Namelist = {
     }
 }
 
+var Random = {
+    flatten : null,
+    size : function(n) { return n; },
+    serialize : function(n, state) {
+        var bytes = crypto.pseudoRandomBytes(n);
+        state.writeBytes(bytes);
+    }
+}
+
 /* Public interface */
 
 function serialize() {
     // used to write SSH data to a buffer
+    var args = arguments;
+    if (args.length === 1 && is_array(args[0])) {
+        args = arguments[0];
+    }
     // 1. Compute length.
     var size = 0;
-    var args = [];
-    for (var x in arguments) {
-        var it = arguments[x];
+    for (var x in args) {
+        var it = args[x];
         if (it.klass.flatten !== null)
             it.value = it.klass.flatten(it.value, it.option);
         size += it.klass.size(it.value);
@@ -284,8 +297,8 @@ function serialize() {
     var buffer = new Buffer(size);
     var state = new State(buffer);
     // 2. Serialize.
-    for (var x in arguments) {
-        var it = arguments[x];
+    for (var x in args) {
+        var it = args[x];
         it.klass.serialize(it.value, state);
     }
     if (!state.eof())
@@ -329,6 +342,7 @@ exports.string = type(Str);
 exports.utf8 = type(Utf8); /* like string, but works with UTF-8 */
 exports.mpint = type(Mpint);
 exports.namelist = type(Namelist);
+exports.random = type(Random);
 
 exports.bigint = big.BigInteger;
 exports.is_bigint = is_bigint;

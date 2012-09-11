@@ -1,9 +1,11 @@
 
 var net = require('net');
 var t = require('./transport.js');
+var p = require('./packet.js');
 
 function SSHSocket(self) {
     var buffer = t.TransportBuffer();
+    var writer = p.PacketWriter();
 
     self.on('data', buffer.feed);
 
@@ -13,6 +15,7 @@ function SSHSocket(self) {
 
     self.on('connect', function() {
         self.write('SSH-2.0-NodeJS TB2011\r\n');
+        self.write(writer.preamble());
     });
 
     return self;
