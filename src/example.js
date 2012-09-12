@@ -1,11 +1,11 @@
 
-var net = require('net');
-var t = require('./transport.js');
-var p = require('./packet.js');
+var net = require('net'),
+    t = require('./transport.js'),
+    p = require('./packet.js');
 
 function SSHSocket(self) {
     var buffer = t.TransportBuffer();
-    var writer = p.PacketWriter();
+    var writer = p.PacketManager();
 
     self.on('data', buffer.feed);
 

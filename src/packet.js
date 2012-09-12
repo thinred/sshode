@@ -4,7 +4,7 @@
 var data = require('./data.js');
 var numbers = require('./numbers.js');
 
-function PacketWriter() {
+function PacketManager() {
     // TODO: handle mac and padding length
 
     var self = new Object();
@@ -12,7 +12,7 @@ function PacketWriter() {
     var block = 8;
 
     self.write = function(payload) {
-        var total = 4 + 1 + payload.length;
+        var total = 4 + 1 + data.size(payload);
         var padlen = block - (total % block);
         if (padlen < minimal)
             padlen += block;
@@ -20,26 +20,20 @@ function PacketWriter() {
         var packet = [ 
             data.uint32(total - 4), 
             data.byte(padlen),
-            data.bytes(payload),
+            payload,
             data.random(padlen) 
         ];
         return data.serialize(packet);
     }
 
-    self.serialize = function(args) {
-        var payload = data.serialize(args);
-        return self.write(payload);
-    }
-
     self.preamble = function() {
-        var payload = data.serialize(Preamble);
-        return self.write(payload);
+        return self.write(ThisPreamble);
     }
 
     return self;
 }
 
-Preamble = [
+ThisPreamble = [
     data.byte(numbers.SSH_MSG_KEXINIT),
     data.random(16),
     data.namelist([ 
@@ -59,4 +53,4 @@ Preamble = [
     data.uint32(0)
 ];
 
-exports.PacketWriter = PacketWriter;
+exports.PacketManager = PacketManager;

@@ -280,15 +280,21 @@ var Random = {
 
 /* Public interface */
 
-function serialize() {
-    // used to write SSH data to a buffer
-    var size = 0;
-    utils.flatten_iter(arguments, function(it) {
+function size(o) {
+    // TODO: add some caching
+    var bytes = 0;
+    utils.flatten_iter(o, function(it) {
         if (it.klass.flatten !== null)
             it.value = it.klass.flatten(it.value, it.option);
-        size += it.klass.size(it.value);
+        bytes += it.klass.size(it.value);
     });
-    var buffer = new Buffer(size);
+    return bytes;
+}
+
+function serialize() {
+    // used to write SSH data to a buffer
+    var bytes = size(arguments);
+    var buffer = new Buffer(bytes);
     var state = new State(buffer);
     // 2. Serialize.
     utils.flatten_iter(arguments, function(it) {
@@ -337,6 +343,7 @@ exports.mpint = type(Mpint);
 exports.namelist = type(Namelist);
 exports.random = type(Random);
 
+exports.size = size;
 exports.bigint = big.BigInteger;
 exports.is_bigint = is_bigint;
 exports.is_array = is_array;
