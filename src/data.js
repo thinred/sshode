@@ -282,25 +282,18 @@ var Random = {
 
 function serialize() {
     // used to write SSH data to a buffer
-    var args = arguments;
-    if (args.length === 1 && is_array(args[0])) {
-        args = arguments[0];
-    }
-    // 1. Compute length.
     var size = 0;
-    for (var x in args) {
-        var it = args[x];
+    utils.flatten_iter(arguments, function(it) {
         if (it.klass.flatten !== null)
             it.value = it.klass.flatten(it.value, it.option);
         size += it.klass.size(it.value);
-    }
+    });
     var buffer = new Buffer(size);
     var state = new State(buffer);
     // 2. Serialize.
-    for (var x in args) {
-        var it = args[x];
+    utils.flatten_iter(arguments, function(it) {
         it.klass.serialize(it.value, state);
-    }
+    });
     if (!state.eof())
         throw 'Fatal error (eof not reached)';
     return buffer;

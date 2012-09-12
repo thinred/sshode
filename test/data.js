@@ -107,4 +107,9 @@ exports.run = function() {
     var o = d.parse_object(b, [ d.byte('b1'), d.bytes('b2', 2) ]);
     assert.equal(o.b1, 1)
     assert.equal(o.b2.toString('hex'), '0203');
+
+    // flattening serializing
+
+    var b = d.serialize(d.byte(9), [ [ d.byte(10) ], d.bytes([3, 14]) ]);
+    assert.equal(b.toString('hex'), '090a030e');
 };

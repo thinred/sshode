@@ -1,4 +1,6 @@
 
+/* Various utils */
+
 function concat(buf1, buf2) {
     var newbuf = new Buffer(buf1.length + buf2.length);
     buf1.copy(newbuf);
@@ -62,3 +64,5 @@ exports.is_string = is_string;
 exports.is_bigint = is_bigint;
 exports.concat = concat;
 exports.index_of = index_of;
+exports.flatten_iter = flatten_iter;
+exports.flatten = flatten;
