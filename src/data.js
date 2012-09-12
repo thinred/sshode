@@ -1,8 +1,12 @@
 
 'use strict';
 
-var big = require('./bigdecimal.js');
 var crypto = require('crypto');
+var big = require('./bigdecimal.js');
+var utils = require('./utils.js'),
+    is_array = utils.is_array,
+    is_string = utils.is_string,
+    is_bigint = utils.is_bigint;
 
 var BIG255 = new big.BigInteger('255');
 var ZERO = new big.BigInteger('0');
@@ -56,10 +60,6 @@ function State(buffer) {
         return (offset == buffer.length);
     }
 }
-
-function is_string(v) { return (typeof v === 'string'); }
-function is_array(v) { return (v.constructor.name === 'Array'); }
-function is_bigint(v) { return (!!v.divideAndRemainder); }
 
 function raw_bytes(v) {
     var bytes = [];
