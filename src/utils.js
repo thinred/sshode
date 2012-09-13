@@ -28,6 +28,10 @@ function is_string(v) {
     return (typeof v === 'string');
 }
 
+function is_number(v) {
+    return (typeof v === 'number');
+}
+
 function is_bigint(v) {
     return (!!v.divideAndRemainder);
 }
@@ -62,6 +66,7 @@ function flatten(array) {
 exports.is_array = is_array;
 exports.is_string = is_string;
 exports.is_bigint = is_bigint;
+exports.is_number = is_number;
 exports.concat = concat;
 exports.index_of = index_of;
 exports.flatten_iter = flatten_iter;

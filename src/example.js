@@ -4,19 +4,11 @@ var net = require('net'),
     p = require('./packet.js');
 
 function SSHSocket(self) {
-    var buffer = t.TransportBuffer();
-    var writer = p.PacketManager();
+    var buffer = t.TransportBuffer(self);
 
     self.on('data', buffer.feed);
 
-    buffer.wait_for_preamble(function(buf) {
-        console.log('Preamble: ' + buf.toString());
-    });
-
-    self.on('connect', function() {
-        self.write('SSH-2.0-NodeJS TB2011\r\n');
-        self.write(writer.preamble());
-    });
+    buffer.establish();
 
     return self;
 }

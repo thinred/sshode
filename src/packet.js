@@ -18,12 +18,13 @@ function PacketManager() {
             padlen += block;
         total += padlen;
         var packet = [ 
-            data.uint32(total - 4), 
-            data.byte(padlen),
-            payload,
-            data.random(padlen) 
+            data.uint32(total - 4), // size
+            data.byte(padlen),      // padding length
+            payload,                // payload
+            data.random(padlen)     // random padding
         ];
-        return data.serialize(packet);
+        var content = data.serialize(packet);
+        return content;
     }
 
     self.preamble = function() {

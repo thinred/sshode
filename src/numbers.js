@@ -14,6 +14,9 @@ exports.SSH_MSG_SERVICE_ACCEPT  = 6;
 exports.SSH_MSG_KEXINIT         = 20;
 exports.SSH_MSG_NEWKEYS         = 21;
 
+exports.SSH_MSG_KEXDH_INIT      = 30;
+exports.SSH_MSG_KEXDH_REPLY     = 31;
+
 // SSH-USERAUTH
 exports.SSH_MSG_USERAUTH_REQUEST = 50;
 exports.SSH_MSG_USERAUTH_FAILURE = 51;

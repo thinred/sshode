@@ -6,7 +6,8 @@ var big = require('./bigdecimal.js');
 var utils = require('./utils.js'),
     is_array = utils.is_array,
     is_string = utils.is_string,
-    is_bigint = utils.is_bigint;
+    is_bigint = utils.is_bigint,
+    is_number = utils.is_number;
 
 var BIG255 = new big.BigInteger('255');
 var ZERO = new big.BigInteger('0');
@@ -57,7 +58,7 @@ function State(buffer) {
     }
 
     this.eof = function() {
-        return (offset == buffer.length);
+        return (offset === buffer.length);
     }
 }
 
@@ -126,8 +127,10 @@ function type(klass) {
             It should parse itself and return itself.
  */
 
+var Id = function(x) { return x; }
+
 var Byte = {
-    flatten : null,
+    flatten : Id,
     size : function() { return 1; },
     serialize : function(v, state) { state.writeByte(v); },
     parse : function(state) { return state.readByte(); }
@@ -135,7 +138,11 @@ var Byte = {
 
 var Bytes = {
     flatten : to_buffer,
-    size : function(v) { return v.length; },
+    size : function(v) {
+        if (is_number(v)) // parsing part
+            return v;
+        return v.length;
+    },
     serialize : function(v, state) { state.writeBytes(v); },
     parse : function(state, n) { return state.readBytes(n); }
 }
@@ -148,7 +155,7 @@ var Bool = {
 }
 
 var Uint32 = {
-    flatten : null,
+    flatten : Id,
     size : function() { return 4; },
     serialize : function(v, state) {
         if (v < 0 || v > 0xffffffff)
@@ -270,11 +277,20 @@ var Namelist = {
 }
 
 var Random = {
-    flatten : null,
+    flatten : Id,
     size : function(n) { return n; },
     serialize : function(n, state) {
         var bytes = crypto.pseudoRandomBytes(n);
         state.writeBytes(bytes);
+    }
+}
+
+var Eof = {
+    flatten : Id,
+    size : function() { return 0; },
+    parse : function(state) {
+        if (!state.eof())
+            throw "No EOF!";
     }
 }
 
@@ -284,9 +300,8 @@ function size(o) {
     // TODO: add some caching
     var bytes = 0;
     utils.flatten_iter(o, function(it) {
-        if (it.klass.flatten !== null)
-            it.value = it.klass.flatten(it.value, it.option);
-        bytes += it.klass.size(it.value);
+        it.real_value = it.klass.flatten(it.value, it.option);
+        bytes += it.klass.size(it.real_value);
     });
     return bytes;
 }
@@ -298,7 +313,7 @@ function serialize() {
     var state = new State(buffer);
     // 2. Serialize.
     utils.flatten_iter(arguments, function(it) {
-        it.klass.serialize(it.value, state);
+        it.klass.serialize(it.real_value, state);
     });
     if (!state.eof())
         throw 'Fatal error (eof not reached)';
@@ -342,6 +357,7 @@ exports.utf8 = type(Utf8); /* like string, but works with UTF-8 */
 exports.mpint = type(Mpint);
 exports.namelist = type(Namelist);
 exports.random = type(Random);
+exports.eof = type(Eof);
 
 exports.size = size;
 exports.bigint = big.BigInteger;
