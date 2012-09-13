@@ -348,6 +348,10 @@ function hexize() {
     return serialize.apply(this, arguments).toString('hex');
 }
 
+function random_bytes(size) {
+    return crypto.pseudoRandomBytes(size);
+}
+
 /* Exports */
 
 exports.byte = type(Byte);
@@ -373,3 +377,5 @@ exports.serialize = serialize;
 exports.hexize = hexize;
 exports.parse_array = parse_array;
 exports.parse_object = parse_object;
+
+exports.random_bytes = random_bytes;

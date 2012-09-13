@@ -1,7 +1,6 @@
 
 var net = require('net'),
-    t = require('./transport.js'),
-    p = require('./packet.js');
+    t = require('./transport.js');
 
 function SSHSocket(self) {
     var buffer = t.TransportBuffer(self);

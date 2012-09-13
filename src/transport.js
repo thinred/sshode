@@ -129,26 +129,98 @@ var KEX_INIT = [
 
 var KEXDH_REPLY = [
     data.byte('type'),
-    data.string('server_certs'),
+    data.string('host_key'),
     data.mpint('f'),
     data.string('signature')
 ];
 
+function parseDSAKey(key) {
+    var o = data.parse_object(key, [
+        data.utf8('name'),
+        data.mpint('p'), data.mpint('q'),
+        data.mpint('g'), data.mpint('y')
+    ]);
+    if (o.name != 'ssh-dss')
+        throw "Wrong key type?";
+    return DSAKey(o);
+}
 
-function DHAlgorithm(name) {
-    // small wrapper around node.js DH (which has weird interface)
-    var self = {};
-    var dh = crypto.getDiffieHellman(name);
-    dh.generateKeys();
+function DSAKey(self) {
 
-    self.get_pubkey = function() {
-        return data.mpint(dh.getPublicKey('hex'), 16);
+    self.verify = function(msg, signature) {
+        var o = data.parse_object(signature,
+            [ data.utf8('name'), data.string('blob') ]
+        );
+        if (o.name != 'ssh-dss' || o.blob.length != 40)
+            throw "Wrong signature?";
+        var parts = data.parse_object(o.blob, [ data.bytes('r', 20), data.bytes('s', 20) ]);
+        var r = data.to_mpint(parts.r),
+            s = data.to_mpint(parts.s);
+
+        if (r.compareTo(self.q) != -1)
+            return false;
+        if (s.compareTo(self.q) != -1)
+            return false;
+
+        var digest_bytes = utils.sha1(msg),
+            digest = data.to_mpint(digest_bytes);
+
+        var w = s.modInverse(self.q),
+            u1 = digest.multiply(w).mod(self.q),
+            u2 = r.multiply(w).mod(self.q),
+            v1 = self.g.modPow(u1, self.p),
+            v2 = self.y.modPow(u2, self.p),
+            v = v1.multiply(v2).mod(self.p).mod(self.q);
+
+        return v.compareTo(r) == 0;
     }
 
-    self.exchange = function(other) {
-        var other_key = other.toString(16); // to hex
+    return self;
+}
+
+function DHAlgorithm(name) {
+    // small wrapper around node.js DH
+    var self = { e : null, f : null, secret : null, h : null };
+    var dh = crypto.getDiffieHellman(name);
+    dh.generateKeys();
+    self.e = data.mpint(dh.getPublicKey('hex'), 16);
+
+    self.exchange = function(f) {
+        if (self.secret)
+            throw "Key exchanged many times?";
+        var other_key = f.toString(16);
         var secret = dh.computeSecret(other_key, 'hex', 'hex');
-        return data.mpint(secret, 16);
+        self.secret = data.mpint(secret, 16);
+        self.f = data.mpint(other_key, 16);
+        return self.secret;
+    }
+
+    var get_attr = function(name, err) {
+        return function() {
+            var value = self[name];
+            if (!value) throw err;
+            return value;
+        }
+    }
+
+    self.get_e = get_attr('e', 'Fatal error');
+    self.get_f = get_attr('f', 'Keys not exchanged');
+    self.get_secret = get_attr('secret', 'Keys not exchanged');
+    self.get_h = get_attr('h', 'Hash not computed');
+
+    self.compute_h = function(params) {
+        var content = data.serialize([
+            data.string(params.client_preamble), // client identification string
+            data.string(params.server_preamble), // server identification string
+            data.string(params.client_kex_payload), // payload of client's KEXINIT
+            data.string(params.server_kex_payload), // payload of server's KEXINIT
+            data.string(params.host_key_payload), // the host key of the server
+            params.kex.get_e(),
+            params.kex.get_f(),
+            params.kex.get_secret()
+        ]);
+        self.h = utils.sha1(content);
+        return self.h;
     }
 
     return self;
@@ -159,11 +231,13 @@ function TransportBuffer(socket) {
     
     var self = BasicBuffer();
 
-    var IDENT = 'SSH-2.0-NodeJS TB2011';
-    var params = {};
+    var params = {
+        client_preamble : 'SSH-2.0-NodeJS TB2011'
+    };
 
     self.write = function(bytes) {
-        return socket.write(bytes);
+        socket.write(bytes);
+        return bytes;
     }
 
     self.write_raw_packet = (function() {
@@ -188,7 +262,7 @@ function TransportBuffer(socket) {
         }
 
         return function(payload) {
-            return socket.write(dump(payload));
+            return self.write(dump(payload));
         }
     })();
 
@@ -209,7 +283,7 @@ function TransportBuffer(socket) {
             var o = data.parse_object(payload, KEX_INIT);
             if (o.type != numbers.SSH_MSG_KEXINIT)
                 throw 'Wrong KEXINIT!';
-            cb(o);
+            cb(o, payload);
         });
     }
 
@@ -224,8 +298,9 @@ function TransportBuffer(socket) {
 
     self.send_preamble = function() {
         socket.on('connect', function() {
-            self.write(IDENT + '\r\n');
-            self.write_raw_packet(KEX_INIT_THIS);
+            self.write(params.client_preamble + '\r\n');
+            var payload = self.write_raw_packet(KEX_INIT_THIS);
+            params.client_kex_payload = payload.slice(1); // used in hash computation
         });
     }
 
@@ -234,22 +309,30 @@ function TransportBuffer(socket) {
         self.wait_for_preamble(self.on_preamble);
     }
 
-    // logic
+    // Business logic of the protocol
 
     self.on_preamble = function(preamble) {
-        params.preamble = preamble;
+        params.server_preamble = preamble;
         self.wait_for_kexinit(self.on_kexinit);
     }
 
-    self.on_kexinit = function(kex) {
+    self.on_kexinit = function(kex, payload) {
         // sending kexdh
+        params.server_kex_payload = payload.slice(1); // used in hash computation
         params.kex = DHAlgorithm('modp2');
-        self.write_packet(numbers.SSH_MSG_KEXDH_INIT, [ params.kex.get_pubkey() ]);
+        self.write_packet(numbers.SSH_MSG_KEXDH_INIT, [ params.kex.get_e() ]);
         self.wait_for_kexdh_reply(self.on_kexdh_reply)
     }
 
     self.on_kexdh_reply = function(reply) {
-        params.shared_secret = params.kex.exchange(reply.f);
+        params.host_key_payload = reply.host_key;
+        params.host_key = parseDSAKey(reply.host_key);
+        params.kex.exchange(reply.f);
+        params.kex.compute_h(params);
+
+        var result = params.host_key.verify(params.kex.get_h(), reply.signature);
+
+        console.log(result);
     }
 
     return self;
