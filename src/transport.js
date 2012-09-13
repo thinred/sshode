@@ -5,7 +5,7 @@
 var utils = require('./utils.js'),
     data = require('./data.js'),
     numbers = require('./numbers.js'),
-    packet = require('./packet.js');
+    crypto = require('crypto');
 
 function BasicBuffer() {
     var self = new Object();
@@ -90,6 +90,26 @@ function BasicBuffer() {
     return self;
 }
 
+var KEX_INIT_THIS = [
+    data.byte(numbers.SSH_MSG_KEXINIT),
+    data.random(16),
+    data.namelist([
+        'diffie-hellman-group1-sha1',
+        'diffie-hellman-group14-sha1' 
+    ]),
+    data.namelist([ 'ssh-dss' ]),
+    data.namelist([ '3des-cbc' ]),
+    data.namelist([ '3des-cbc' ]),
+    data.namelist([ 'hmac-sha1' ]),
+    data.namelist([ 'hmac-sha1' ]),
+    data.namelist([ 'none' ]),
+    data.namelist([ 'none' ]),
+    data.namelist([ '' ]),
+    data.namelist([ '' ]),
+    data.boolean(false),
+    data.uint32(0)
+];
+
 var KEX_INIT = [
     data.byte('type'),
     data.bytes('random', 16),
@@ -114,20 +134,63 @@ var KEXDH_REPLY = [
     data.string('signature')
 ];
 
+
+function DHAlgorithm(name) {
+    // small wrapper around node.js DH (which has weird interface)
+    var self = {};
+    var dh = crypto.getDiffieHellman(name);
+    dh.generateKeys();
+
+    self.get_pubkey = function() {
+        return data.mpint(dh.getPublicKey('hex'), 16);
+    }
+
+    self.exchange = function(other) {
+        var other_key = other.toString(16); // to hex
+        var secret = dh.computeSecret(other_key, 'hex', 'hex');
+        return data.mpint(secret, 16);
+    }
+
+    return self;
+}
+
+
 function TransportBuffer(socket) {
     
     var self = BasicBuffer();
-    var writer = packet.PacketManager();
 
+    var IDENT = 'SSH-2.0-NodeJS TB2011';
     var params = {};
 
     self.write = function(bytes) {
         return socket.write(bytes);
     }
 
-    self.write_raw_packet = function(spec) {
-        return socket.write(writer.write(spec));
-    }
+    self.write_raw_packet = (function() {
+        var minimal = 4;
+        var block = 8;
+
+        // TODO: handle mac and other paddings
+
+        var dump = function(payload) {
+            var total = 4 + 1 + data.size(payload);
+            var padlen = block - (total % block);
+            if (padlen < minimal)
+                padlen += block;
+            total += padlen;
+            var packet = [ 
+                data.uint32(total - 4), // size
+                data.byte(padlen),      // padding length
+                payload,                // payload
+                data.random(padlen)     // random padding
+            ];
+            return data.serialize(packet);
+        }
+
+        return function(payload) {
+            return socket.write(dump(payload));
+        }
+    })();
 
     self.write_packet = function(type, spec) {
         return self.write_raw_packet([ data.byte(type), spec ]);
@@ -137,7 +200,7 @@ function TransportBuffer(socket) {
         // RFC says to ignore every line till it starts with 'SSH-'
         self.wait_for_line(function(buf) {
             var found = (utils.index_of(buf, 'SSH-') != -1);
-            return (found ? cb(buf) : self.wait_for_preamble(cb));
+            return (found ? cb(buf.slice(0, buf.length - 2)) : self.wait_for_preamble(cb));
         });
     }
 
@@ -157,12 +220,12 @@ function TransportBuffer(socket) {
                 throw 'Wrong KEXDH_REPLY!';
             cb(o);
         });
-    }
+    }   
 
     self.send_preamble = function() {
         socket.on('connect', function() {
-            self.write('SSH-2.0-NodeJS TB2011\r\n');
-            self.write(writer.preamble());
+            self.write(IDENT + '\r\n');
+            self.write_raw_packet(KEX_INIT_THIS);
         });
     }
 
@@ -180,15 +243,13 @@ function TransportBuffer(socket) {
 
     self.on_kexinit = function(kex) {
         // sending kexdh
-        // TODO: use node.js crypto
-        self.write_packet(numbers.SSH_MSG_KEXDH_INIT,
-            [ data.mpint(1235345) ]
-        );
+        params.kex = DHAlgorithm('modp2');
+        self.write_packet(numbers.SSH_MSG_KEXDH_INIT, [ params.kex.get_pubkey() ]);
         self.wait_for_kexdh_reply(self.on_kexdh_reply)
     }
 
     self.on_kexdh_reply = function(reply) {
-        // TODO: compute shared secret
+        params.shared_secret = params.kex.exchange(reply.f);
     }
 
     return self;

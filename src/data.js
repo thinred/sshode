@@ -92,6 +92,9 @@ function mpint_to_bytes(sign, v) {
 }
 
 function to_mpint(v, base) {
+    if (Buffer.isBuffer(v)) { // we treat it as a positive number
+        v = new big.BigInteger(v.toString('hex'), 16);
+    } else
     if (!is_bigint(v)) { // detect if v is already BigInteger
         if (!base) base = 10;
         v = new big.BigInteger(v.toString(), base);
@@ -363,6 +366,8 @@ exports.size = size;
 exports.bigint = big.BigInteger;
 exports.is_bigint = is_bigint;
 exports.is_array = is_array;
+
+exports.to_mpint = to_mpint;
 
 exports.serialize = serialize;
 exports.hexize = hexize;

@@ -112,4 +112,9 @@ exports.run = function() {
 
     var b = d.serialize(d.byte(9), [ [ d.byte(10) ], d.bytes([3, 14]) ]);
     assert.equal(b.toString('hex'), '090a030e');
+
+    // converting to mpint
+
+    var x = d.to_mpint(new Buffer([ 0xf3, 1, 4 ]));
+    assert.equal(x.toString(), '15925508');
 };
