@@ -339,3 +339,4 @@ function TransportBuffer(socket) {
 }
 
 exports.TransportBuffer = TransportBuffer;
+exports.DSAKey = DSAKey;
