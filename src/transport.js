@@ -219,11 +219,40 @@ function DHAlgorithm(name) {
             params.kex.get_f(),
             params.kex.get_secret()
         ]);
+
         self.h = utils.sha1(content);
         return self.h;
     }
 
+    self.hash = utils.sha1;
+
     return self;
+}
+
+function derive_keys(algo, session_id) {
+    // derives keys (section 7.2)
+    var derive_key = function(ch, size) {
+        var tail = [ data.bytes(ch), data.bytes(session_id) ];
+        var key = new Buffer(0);
+        while (key.length < size) {
+            var bytes = data.serialize([
+                algo.get_secret(),
+                data.bytes(algo.get_h()),
+                tail ]);
+            bytes = algo.hash(bytes);
+            key = data.serialize([ data.bytes(key), data.bytes(bytes) ]);
+            tail = data.bytes(key);
+        }
+        return key.slice(0, size);
+    }
+    var keys = {};
+    keys.iv_client = derive_key('A', 24);
+    keys.iv_server = derive_key('B', 24);
+    keys.enc_client = derive_key('C', 24);
+    keys.enc_server = derive_key('D', 24);
+    keys.int_client = derive_key('E', 24);
+    keys.int_server = derive_key('F', 24);
+    return keys;
 }
 
 
@@ -232,7 +261,7 @@ function TransportBuffer(socket) {
     var self = BasicBuffer();
 
     var params = {
-        client_preamble : 'SSH-2.0-NodeJS TB2011'
+        client_preamble : 'SSH-2.0-SSHode :)'
     };
 
     self.write = function(bytes) {
@@ -258,11 +287,17 @@ function TransportBuffer(socket) {
                 payload,                // payload
                 data.random(padlen)     // random padding
             ];
-            return data.serialize(packet);
+            var bytes = data.serialize(packet);
+            return {
+                'bytes': bytes,
+                'payload' : bytes.slice(4 + 1, bytes.length - padlen)
+            }
         }
 
         return function(payload) {
-            return self.write(dump(payload));
+            var packet = dump(payload);
+            self.write(packet.bytes);
+            return packet;
         }
     })();
 
@@ -299,8 +334,8 @@ function TransportBuffer(socket) {
     self.send_preamble = function() {
         socket.on('connect', function() {
             self.write(params.client_preamble + '\r\n');
-            var payload = self.write_raw_packet(KEX_INIT_THIS);
-            params.client_kex_payload = payload.slice(1); // used in hash computation
+            var kexinit = self.write_raw_packet(KEX_INIT_THIS);
+            params.client_kex_payload = kexinit.payload; // used in hash computation
         });
     }
 
@@ -318,10 +353,10 @@ function TransportBuffer(socket) {
 
     self.on_kexinit = function(kex, payload) {
         // sending kexdh
-        params.server_kex_payload = payload.slice(1); // used in hash computation
+        params.server_kex_payload = payload; // used in hash computation
         params.kex = DHAlgorithm('modp2');
         self.write_packet(numbers.SSH_MSG_KEXDH_INIT, [ params.kex.get_e() ]);
-        self.wait_for_kexdh_reply(self.on_kexdh_reply)
+        self.wait_for_kexdh_reply(self.on_kexdh_reply);
     }
 
     self.on_kexdh_reply = function(reply) {
@@ -332,7 +367,12 @@ function TransportBuffer(socket) {
 
         var result = params.host_key.verify(params.kex.get_h(), reply.signature);
 
-        console.log(result);
+        console.log('Hash verification: ' + result);
+        console.log('Hash: ' + params.kex.get_h().toString('hex'));
+
+        params.session_id = params.kex.get_h(); // "hash H from the 1st exchange is used as the session id"
+
+        console.log(derive_keys(params.kex, params.session_id));
     }
 
     return self;

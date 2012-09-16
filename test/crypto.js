@@ -18,11 +18,11 @@ goodSignature = d.serialize([
     d.uint32(40),
     d.bytes(new Buffer('7eb786042d656a2406c91abc48d80c541864313b', 'hex')),
     d.bytes(new Buffer('85a476658b6e9e53a5d94e99e5c13fcfc72b4a28', 'hex'))
-]);
-
-badSignature = d.serialize([
-    d.string('ssh-dss'),
-    d.uint32(40),
+]);                                             //   |
+                                                //   |
+badSignature = d.serialize([                    //   |
+    d.string('ssh-dss'),                        //   |
+    d.uint32(40),                               //   |
     d.bytes(new Buffer('7eb786042d656a2406c91abc48d80f541864313b', 'hex')),
     d.bytes(new Buffer('85a476658b6e9e53a5d94e99e5c13fcfc72b4a28', 'hex'))
 ]);
