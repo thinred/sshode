@@ -352,7 +352,13 @@ function random_bytes(size) {
     return crypto.pseudoRandomBytes(size);
 }
 
+function join(args) {
+    return Buffer.concat(args);
+}
+
 /* Exports */
+
+exports.join = join;
 
 exports.byte = type(Byte);
 exports.bytes = type(Bytes);

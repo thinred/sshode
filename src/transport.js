@@ -98,8 +98,8 @@ var KEX_INIT_THIS = [
         'diffie-hellman-group14-sha1' 
     ]),
     data.namelist([ 'ssh-dss' ]),
-    data.namelist([ '3des-cbc' ]),
-    data.namelist([ '3des-cbc' ]),
+    data.namelist([ 'aes128-cbc', '3des-cbc' ]),
+    data.namelist([ 'aes128-cbc', '3des-cbc' ]),
     data.namelist([ 'hmac-sha1' ]),
     data.namelist([ 'hmac-sha1' ]),
     data.namelist([ 'none' ]),
@@ -178,6 +178,36 @@ function DSAKey(self) {
     return self;
 }
 
+function HmacOpenSSL(name, key) {
+    var self = {};
+
+    self.digest = function(bytes) {
+        var hmac = crypto.createHmac(name, key);
+        hmac.update(bytes);
+        return new Buffer(hmac.digest('hex'), 'hex');
+    }
+
+    return self;
+}
+
+function HmacSha1(key) {
+    return HmacOpenSSL('sha1', key);
+}
+
+function CipherOpenSSL(name, key, iv) {
+    var self = {};
+    self.encrypt = function(bytes) {
+        var c = crypto.createCipheriv(name, key, iv);
+        var x = c.update(bytes.toString('binary'), 'binary', 'hex');
+        return new Buffer(x, 'hex');
+    }
+    return self;
+}
+
+function CipherAES128(key, iv) {
+    return CipherOpenSSL('AES-128-CBC', key, iv);
+}
+
 function DHAlgorithm(name) {
     // small wrapper around node.js DH
     var self = { e : null, f : null, secret : null, h : null };
@@ -246,10 +276,10 @@ function derive_keys(algo, session_id) {
         return key.slice(0, size);
     }
     var keys = {};
-    keys.iv_client = derive_key('A', 24);
-    keys.iv_server = derive_key('B', 24);
-    keys.enc_client = derive_key('C', 24);
-    keys.enc_server = derive_key('D', 24);
+    keys.iv_client = derive_key('A', 16);
+    keys.iv_server = derive_key('B', 16);
+    keys.enc_client = derive_key('C', 16);
+    keys.enc_server = derive_key('D', 16);
     keys.int_client = derive_key('E', 24);
     keys.int_server = derive_key('F', 24);
     return keys;
@@ -261,7 +291,10 @@ function TransportBuffer(socket) {
     var self = BasicBuffer();
 
     var params = {
-        client_preamble : 'SSH-2.0-SSHode :)'
+        client_preamble : 'SSH-2.0-SSHode :)',
+        block_size : 8,
+        hmac_client : null,
+        cipher_client : null
     };
 
     self.write = function(bytes) {
@@ -271,11 +304,12 @@ function TransportBuffer(socket) {
 
     self.write_raw_packet = (function() {
         var minimal = 4;
-        var block = 8;
+        var seq = 0;  // sequence number
 
         // TODO: handle mac and other paddings
 
         var dump = function(payload) {
+            var block = params.block_size;
             var total = 4 + 1 + data.size(payload);
             var padlen = block - (total % block);
             if (padlen < minimal)
@@ -288,6 +322,20 @@ function TransportBuffer(socket) {
                 data.random(padlen)     // random padding
             ];
             var bytes = data.serialize(packet);
+            var original = bytes;
+            if (params.cipher_client) {
+                bytes = params.cipher_client.encrypt(bytes);
+            }
+            if (params.hmac_client) { // if HMAC is in use
+                var m = data.serialize([
+                    data.uint32(seq),
+                    data.bytes(original)
+                ]);
+                var mac = params.hmac_client.digest(m);
+                packet = data.join([bytes, mac]);
+            }
+            console.log(bytes);
+            seq += 1; // increment sequence number
             return {
                 'bytes': bytes,
                 'payload' : bytes.slice(4 + 1, bytes.length - padlen)
@@ -303,6 +351,34 @@ function TransportBuffer(socket) {
 
     self.write_packet = function(type, spec) {
         return self.write_raw_packet([ data.byte(type), spec ]);
+    }
+
+    self.send_ignore = function() {
+        return self.write_packet(numbers.SSH_MSG_IGNORE, data.string('ignore me'));
+    }
+
+    self.send_debug = function(msg) {
+        return self.write_packet(numbers.SSH_MSG_DEBUG, [
+            data.boolean(true),
+            data.utf8('!!!!! ' + msg + ' !!!!!'),
+            data.string('*')
+        ]);
+    }
+
+    self.request_auth = function() {
+        return self.write_packet(numbers.SSH_MSG_SERVICE_REQUEST, [
+            data.string('ssh-userauth')
+        ]);
+    }
+
+    self.send_disconnect = function(msg) {
+        if (!msg)
+            msg = '';
+        return self.write_packet(numbers.SSH_MSG_DISCONNECT, [
+            data.uint32(4),
+            data.utf8(msg),
+            data.string('*')
+        ]);
     }
 
     self.wait_for_preamble = function(cb) {
@@ -354,6 +430,7 @@ function TransportBuffer(socket) {
     self.on_kexinit = function(kex, payload) {
         // sending kexdh
         params.server_kex_payload = payload; // used in hash computation
+        // TODO: actually negotiate
         params.kex = DHAlgorithm('modp2');
         self.write_packet(numbers.SSH_MSG_KEXDH_INIT, [ params.kex.get_e() ]);
         self.wait_for_kexdh_reply(self.on_kexdh_reply);
@@ -370,9 +447,26 @@ function TransportBuffer(socket) {
         console.log('Hash verification: ' + result);
         console.log('Hash: ' + params.kex.get_h().toString('hex'));
 
-        params.session_id = params.kex.get_h(); // "hash H from the 1st exchange is used as the session id"
+        if (!result)
+            throw 'Hash does not compute!';
 
-        console.log(derive_keys(params.kex, params.session_id));
+        self.write_packet(numbers.SSH_MSG_NEWKEYS, []);
+
+        params.session_id = params.kex.get_h(); // "hash H from the 1st exchange is used as the session id"
+        params.keys = derive_keys(params.kex, params.session_id);
+
+        // TODO: used negotiated algos
+        params.cipher_client = CipherAES128(params.keys.enc_client, params.keys.iv_client);
+        params.cipher_server = CipherAES128(params.keys.enc_server, params.keys.iv_server);
+
+        params.hmac_client = HmacSha1(params.keys.int_client);
+        params.hmac_server = HmacSha1(params.keys.int_server);
+
+        params.block_size = 16; // set packet block_size
+
+        self.send_debug('tej');
+
+        self.request_auth();
     }
 
     return self;
