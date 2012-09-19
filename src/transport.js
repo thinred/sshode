@@ -181,6 +181,8 @@ function DSAKey(self) {
 function HmacOpenSSL(name, key) {
     var self = {};
 
+    console.log(key);
+
     self.digest = function(bytes) {
         var hmac = crypto.createHmac(name, key);
         hmac.update(bytes);
@@ -196,8 +198,9 @@ function HmacSha1(key) {
 
 function CipherOpenSSL(name, key, iv) {
     var self = {};
-    self.encrypt = function(bytes) {
-        var c = crypto.createCipheriv(name, key, iv);
+    var c = crypto.createCipheriv(name, key, iv);
+
+    self.encrypt = function(bytes) {    
         var x = c.update(bytes.toString('binary'), 'binary', 'hex');
         return new Buffer(x, 'hex');
     }
@@ -275,13 +278,14 @@ function derive_keys(algo, session_id) {
         }
         return key.slice(0, size);
     }
-    var keys = {};
-    keys.iv_client = derive_key('A', 16);
-    keys.iv_server = derive_key('B', 16);
-    keys.enc_client = derive_key('C', 16);
-    keys.enc_server = derive_key('D', 16);
-    keys.int_client = derive_key('E', 24);
-    keys.int_server = derive_key('F', 24);
+    var keys = {
+        iv_client : derive_key('A', 16),
+        iv_server : derive_key('B', 16),
+        enc_client : derive_key('C', 16),
+        enc_server : derive_key('D', 16),
+        int_client : derive_key('E', 20),
+        int_server : derive_key('F', 20)
+    }
     return keys;
 }
 
@@ -289,6 +293,7 @@ function derive_keys(algo, session_id) {
 function TransportBuffer(socket) {
     
     var self = BasicBuffer();
+    var seq = 0;  // sequence number
 
     var params = {
         client_preamble : 'SSH-2.0-SSHode :)',
@@ -303,16 +308,13 @@ function TransportBuffer(socket) {
     }
 
     self.write_raw_packet = (function() {
-        var minimal = 4;
-        var seq = 0;  // sequence number
-
-        // TODO: handle mac and other paddings
+        var minimal_padding = 4;
 
         var dump = function(payload) {
             var block = params.block_size;
             var total = 4 + 1 + data.size(payload);
             var padlen = block - (total % block);
-            if (padlen < minimal)
+            if (padlen < minimal_padding)
                 padlen += block;
             total += padlen;
             var packet = [ 
@@ -332,9 +334,8 @@ function TransportBuffer(socket) {
                     data.bytes(original)
                 ]);
                 var mac = params.hmac_client.digest(m);
-                packet = data.join([bytes, mac]);
+                bytes = data.join([bytes, mac]);
             }
-            console.log(bytes);
             seq += 1; // increment sequence number
             return {
                 'bytes': bytes,
@@ -455,7 +456,7 @@ function TransportBuffer(socket) {
         params.session_id = params.kex.get_h(); // "hash H from the 1st exchange is used as the session id"
         params.keys = derive_keys(params.kex, params.session_id);
 
-        // TODO: used negotiated algos
+        // TODO: use negotiated algos
         params.cipher_client = CipherAES128(params.keys.enc_client, params.keys.iv_client);
         params.cipher_server = CipherAES128(params.keys.enc_server, params.keys.iv_server);
 
@@ -464,7 +465,9 @@ function TransportBuffer(socket) {
 
         params.block_size = 16; // set packet block_size
 
-        self.send_debug('tej');
+        self.send_debug('A');
+        self.send_debug('B');
+        self.send_debug('C');
 
         self.request_auth();
     }
