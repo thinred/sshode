@@ -5,7 +5,10 @@
 var utils = require('./utils.js'),
     data = require('./data.js'),
     numbers = require('./numbers.js'),
-    crypto = require('crypto');
+    crypto = require('crypto'),
+    log = require('./log.js'),
+    algos = require('./algos.js'),
+    fs = require('fs');
 
 function BasicBuffer() {
     var self = new Object();
@@ -27,8 +30,13 @@ function BasicBuffer() {
             buffer = buffer.slice(size);
             var cb = wait_callback;
             wait_callback = null;
+            wait_predicate = null;
             cb(buf, self); // calls callback
         }
+    }
+
+    self.get_buffer = function() {
+        return buffer;
     }
 
     self.wait_for = function(cb, predicate) {
@@ -49,6 +57,13 @@ function BasicBuffer() {
         // waits for 'size' bytes to show up
         self.wait_for(cb, function(buf) { 
             return (buf.length >= size) ? size : null;
+        });
+    }
+
+    self.peek_size = function(size, cb) {
+        // waits for 'size' bytes but does not consume
+        self.wait_for(cb, function(buf) {
+            return (buf.length >= size) ? 0 : null;
         });
     }
 
@@ -181,34 +196,19 @@ function DSAKey(self) {
 function HmacOpenSSL(name, key) {
     var self = {};
 
-    console.log(key);
-
     self.digest = function(bytes) {
         var hmac = crypto.createHmac(name, key);
         hmac.update(bytes);
         return new Buffer(hmac.digest('hex'), 'hex');
     }
 
+    self.size = 20;
+
     return self;
 }
 
 function HmacSha1(key) {
     return HmacOpenSSL('sha1', key);
-}
-
-function CipherOpenSSL(name, key, iv) {
-    var self = {};
-    var c = crypto.createCipheriv(name, key, iv);
-
-    self.encrypt = function(bytes) {    
-        var x = c.update(bytes.toString('binary'), 'binary', 'hex');
-        return new Buffer(x, 'hex');
-    }
-    return self;
-}
-
-function CipherAES128(key, iv) {
-    return CipherOpenSSL('AES-128-CBC', key, iv);
 }
 
 function DHAlgorithm(name) {
@@ -279,6 +279,7 @@ function derive_keys(algo, session_id) {
         return key.slice(0, size);
     }
     var keys = {
+        // pick key lengths for negotiated algos
         iv_client : derive_key('A', 16),
         iv_server : derive_key('B', 16),
         enc_client : derive_key('C', 16),
@@ -289,6 +290,9 @@ function derive_keys(algo, session_id) {
     return keys;
 }
 
+function peek_type(msg) {
+    return data.parse_array(msg.slice(0, 1), [ data.byte(1) ])[0];
+}
 
 function TransportBuffer(socket) {
     
@@ -326,7 +330,7 @@ function TransportBuffer(socket) {
             var bytes = data.serialize(packet);
             var original = bytes;
             if (params.cipher_client) {
-                bytes = params.cipher_client.encrypt(bytes);
+                bytes = params.cipher_client.encrypt_msg(bytes);
             }
             if (params.hmac_client) { // if HMAC is in use
                 var m = data.serialize([
@@ -363,12 +367,6 @@ function TransportBuffer(socket) {
             data.boolean(true),
             data.utf8('!!!!! ' + msg + ' !!!!!'),
             data.string('*')
-        ]);
-    }
-
-    self.request_auth = function() {
-        return self.write_packet(numbers.SSH_MSG_SERVICE_REQUEST, [
-            data.string('ssh-userauth')
         ]);
     }
 
@@ -416,7 +414,19 @@ function TransportBuffer(socket) {
         });
     }
 
-    self.establish = function() {
+    self.wait_for_new_keys = function(cb) {
+        self.wait_for_raw_packet(function(payload) {
+            if (payload.length != 1)
+                throw 'Wrong NEW_KEYS!';
+            var o = data.parse_object(payload, [ data.byte('type') ]);
+            if (o.type != numbers.SSH_MSG_NEWKEYS)
+                throw 'Wrong NEW_KEYS (2)!'
+            cb();
+        });
+    }
+
+    self.establish = function(cb) {
+        self.on_established = cb;
         self.send_preamble();
         self.wait_for_preamble(self.on_preamble);
     }
@@ -445,8 +455,8 @@ function TransportBuffer(socket) {
 
         var result = params.host_key.verify(params.kex.get_h(), reply.signature);
 
-        console.log('Hash verification: ' + result);
-        console.log('Hash: ' + params.kex.get_h().toString('hex'));
+        log.show('Hash verification: ' + result);
+        log.show('Hash: ' + params.kex.get_h().toString('hex'));
 
         if (!result)
             throw 'Hash does not compute!';
@@ -457,20 +467,159 @@ function TransportBuffer(socket) {
         params.keys = derive_keys(params.kex, params.session_id);
 
         // TODO: use negotiated algos
-        params.cipher_client = CipherAES128(params.keys.enc_client, params.keys.iv_client);
-        params.cipher_server = CipherAES128(params.keys.enc_server, params.keys.iv_server);
+
+        params.cipher_client = new algos.AesCbc(params.keys.enc_client, 
+            params.keys.iv_client);
+        params.cipher_server = new algos.AesCbc(params.keys.enc_server,
+            params.keys.iv_server);
 
         params.hmac_client = HmacSha1(params.keys.int_client);
         params.hmac_server = HmacSha1(params.keys.int_server);
 
         params.block_size = 16; // set packet block_size
 
-        self.send_debug('A');
-        self.send_debug('B');
-        self.send_debug('C');
-
-        self.request_auth();
+        self.wait_for_new_keys(self.on_new_keys);
     }
+
+    self.wait_for_pkt = function(cb) {
+        self.peek_size(16, function(_, buffer) {
+            var bytes = buffer.get_buffer().slice(0, 16);
+            var o = params.cipher_server.peek(bytes);
+            var lens = data.parse_array(o.slice(0, 5), [ data.uint32, data.byte ]);
+            var len = lens[0];
+            var padlen = lens[1];
+            var maclen = params.hmac_server.size;
+            self.wait_for_size(4 + len, function(rest) {
+                rest = params.cipher_server.decrypt_msg(rest);
+                var pkt = data.parse_object(rest, [
+                    data.uint32('len'),
+                    data.byte('padlen'),
+                    data.bytes('payload', len - padlen - 1),
+                    data.bytes('padding', padlen)
+                ]);
+                self.wait_for_size(maclen, function(hmac) {
+                    params.hmac_server.digest(rest);
+                    // TODO: dont ignore
+                    cb(pkt.payload);
+                });
+            });
+        });
+    }
+
+    self.wait_for_pkt_type = function(type, cb) {
+        self.wait_for_pkt(function(payload) {
+            var t = peek_type(payload);
+            if (t != type)
+                throw 'wrong packet';
+            cb(payload);
+        });
+    }
+
+    self.wait_for_service_accept = function(cb) {
+        self.wait_for_pkt_type(numbers.SSH_MSG_SERVICE_ACCEPT, function(payload) {
+            var o = data.parse_object(payload, [
+                data.byte('type'),
+                data.utf8('service_name')
+            ]);
+            // check service
+            cb();
+        });
+    }
+
+    self.request_auth = function() {
+        return self.write_packet(numbers.SSH_MSG_SERVICE_REQUEST, [
+            data.string('ssh-userauth')
+        ]);
+    }
+
+    self.on_new_keys = function() {
+        self.request_auth();
+        self.wait_for_service_accept(function() {
+            self.perform_auth();
+        });
+    }
+
+    self.perform_auth = function() {
+        var creds = fs.readFileSync('./creds.json', 'utf8');
+        creds = JSON.parse(creds);
+        self.write_packet(numbers.SSH_MSG_USERAUTH_REQUEST, [
+            data.utf8(creds.user),
+            data.utf8('ssh-connection'),
+            data.utf8('password'),
+            data.boolean(false),
+            data.utf8(creds.pass)
+        ]);
+        self.wait_for_pkt(function(payload) {
+            var t = peek_type(payload);
+            if (t != numbers.SSH_MSG_USERAUTH_SUCCESS)
+                throw 'error';
+            // TODO
+            self.on_established(self);
+        });
+    }
+
+
+    self.request_session = function(cb) {
+        self.write_packet(numbers.SSH_MSG_CHANNEL_OPEN, [
+            data.utf8('session'),
+            data.uint32(42), // TODO
+            data.uint32(1000),
+            data.uint32(512)
+        ]);
+        self.wait_for_pkt(function(payload) {
+            var type = peek_type(payload);
+            if (type != numbers.SSH_MSG_CHANNEL_OPEN_CONFIRMATION)
+                throw 'error';
+            var o = data.parse_object(payload, [
+                data.byte('type'),
+                data.uint32('recipient_channel'),
+                data.uint32('sender_channel'),
+                data.uint32('window_size'),
+                data.uint32('max_packet_size')
+            ]);
+            console.log(o);
+            cb();
+        });
+    }
+
+    self.exec = function(cmd, cb) {
+        // executes a command
+        self.request_session(function(session) {
+            self.write_packet(numbers.SSH_MSG_CHANNEL_REQUEST, [
+                data.uint32(0),
+                data.utf8('exec'),
+                data.boolean('true'),
+                data.utf8(cmd)
+            ]);
+            self.wait_for_pkt(function(payload) {
+                if (peek_type(payload) != 
+                    numbers.SSH_MSG_CHANNEL_WINDOW_ADJUST)
+                    throw 'window error';
+                var o = data.parse_object(payload, [
+                    data.byte('type'),
+                    data.uint32('recipient_channel'),
+                    data.uint32('bytes')
+                ]);
+                self.handle_data(cb);
+            });
+        });
+    }
+
+    self.handle_data = function(cb) {
+        self.wait_for_pkt(function(payload) {
+            // SSH_MSG_CHANNEL_SUCCESS
+            self.wait_for_pkt(function(p) {
+                // SSH_MSG_CHANNEL_DATA
+                var o = data.parse_object(p, [
+                    data.byte('type'),
+                    data.uint32('recipient_channel'),
+                    data.string('data')
+                ]);
+                cb(o.data);
+            });
+        });
+    }
+
 
     return self;
 }

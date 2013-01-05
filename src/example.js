@@ -2,27 +2,32 @@
 var net = require('net'),
     t = require('./transport.js');
 
-function SSHSocket(self) {
+function SSHSocket(self, cb) {
     var buffer = t.TransportBuffer(self);
 
     self.on('data', buffer.feed);
 
-    buffer.establish();
+    buffer.establish(cb);
 
-    return self;
+    return buffer;
 }
 
-function ssh_connect(host) {
+function ssh_connect(host, cb) {
     var client = net.connect(22, host);
-    return SSHSocket(client);
+    return SSHSocket(client, cb);
 }
 
 (function() {
-    var client = ssh_connect('localhost');
-    client.setTimeout(2000);
-
-    client.on('timeout', function() {
-        client.end();
+    ssh_connect('localhost', function(c) {
+        c.exec('uname', function(out) {
+            console.log(out.toString('utf8'));
+        });
     });
+    // client.setTimeout(2000);
+
+    // client.on('timeout', function() {
+    //    client.end();
+    // });
+
 })();
 
